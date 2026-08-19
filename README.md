@@ -1,124 +1,24 @@
-# Fatima — Emirati AI Voice Assistant: Technical Plan
+# Fatima — Emirati AI Voice Assistant
 
-**Project name: Fatima.** Wake phrase: **"يا فاطمة"**.
+A voice assistant built for Emirati homes, spoken to as **"يا فاطمة."** Designed around real Emirati dialect (not just MSA with a Gulf accent), with a strong focus on elderly users — Quran playback, patient companionship, and everyday agent tasks like phone calls and appointment booking.
 
-*Before finalizing: test the wake phrase in a real majlis/family setting where an actual Fatima might be present (mother, daughter, grandmother, guest), to check for accidental mis-triggers from people simply calling her name in normal conversation. Also worth a quick gut-check with a few elderly Emirati users on how the name feels to them, given its religious resonance (Fatima bint Muhammad ﷺ) — some will love that connection, and it's worth confirming it lands the way you intend before it's locked into hardware and branding.*
+## Status
+🟡 Early planning / pre-prototype
 
-## 1. Vision
+## Docs
+- [`docs/technical-plan.md`](docs/technical-plan.md) — architecture, ASR/TTS strategy, the Ramsa Lab dialect module integration, LLM/dialogue design, privacy & UAE regulatory notes, hardware, and the phased roadmap.
 
-A smart speaker for Emirati homes — named Fatima — that:
-- Speaks and understands real Emirati dialect (not just Modern Standard Arabic with a Gulf accent)
-- Prioritizes elderly users — recites and plays Quran on request, listens patiently, remembers what they told it, and helps them get things done
-- Acts as an agent: makes phone calls, books appointments, handles small tasks
-- Feels like it belongs in an Emirati majlis, not like an imported gadget with Arabic bolted on
+## Roadmap snapshot
+1. Integrate & benchmark the Ramsa Lab Emirati voice module
+2. Build a minimum conversation loop (wake word → ASR → LLM → TTS), no hardware
+3. Design Quran & companionship conversation behavior
+4. Test with real elderly Emirati speakers, log corrections
+5. Fine-tune on that correction data
+6. Move to real hardware (MVP pilot)
+7. Add agent capabilities — calls, bookings, reminders
+8. Scale
 
-This is the core difference from Yasmina: Yasmina is bilingual Gulf-flavored MSA. You're building something dialect-native and elder-centered, where *being listened to* is a designed feature, not a side effect of voice recognition.
+Full detail in the technical plan doc above.
 
-## 2. Why "sounds Emirati" is the hard part
-
-Arabic voice AI in 2026 has largely solved text-to-speech — Gulf-accented voices are common. The hard part is the other direction: **understanding** what an elderly Emirati actually says. Dialect speech diverges from MSA in vocabulary, verb forms, and pronunciation (e.g. "ابغى", "شلونك", ق pronounced as ج/گ), and elderly speakers often speak more slowly, with pauses, throat clearing, and less "clean" audio than a call-center recording. Most general-purpose ASR (including Whisper-class models) was trained mostly on MSA and struggles badly here — real-world error rates on Gulf dialect speech from generic models can run 40%+ word error rate, versus under 20% for Gulf-specialized systems. Getting this layer right is the single biggest determinant of whether the product feels magical or frustrating.
-
-## 3. System architecture
-
-A voice assistant like this is a pipeline, not one model. Roughly:
-
-```
-Wake word → ASR (speech→text) → NLU/Dialogue (understanding + response) 
-→ TTS (text→speech) → Speaker output
-                ↓
-    Agent layer (calls, bookings, smart home, reminders)
-                ↓
-    Memory / personalization layer (per family member)
-```
-
-### 3.1 Wake word & audio capture
-- Multi-mic array (2–4 mics) with beamforming and echo cancellation, since living rooms/majlis spaces are noisy and speakers may sit far from the device.
-- Custom wake word in Emirati dialect ("يا [name]") rather than an English default — this alone signals cultural intent.
-- On-device wake-word detection (cheap, always-on), full ASR happens after wake word triggers, either on-device or cloud depending on your latency/cost tradeoff.
-
-### 3.2 Speech recognition (ASR) — the layer to get right first
-This is worth building or licensing carefully rather than defaulting to a generic API. A few realistic paths, roughly in order of how "Gulf-native" they are:
-- **License a Gulf/Emirati-specialized ASR API** — there are UAE-built platforms (e.g. Munsit, built by CNTXT FZCO) that specifically target Khaleeji/Emirati dialect, offer sovereign/on-prem deployment for data residency, and report meaningfully lower error rates on Gulf speech than generic models. This is the fastest path to something that actually understands elderly Emirati speakers.
-- **Fine-tune an open-weight Arabic ASR model** on Emirati audio you collect yourself (elderly speech specifically — different from young professional speech). Slower, more expensive, but gives you full control and no per-call API cost long-term. There are recent open Arabic-dialect ASR models on Hugging Face that could serve as a starting point.
-- **Generic multilingual ASR (Whisper, Google, Azure)** — fastest to prototype with, but expect it to mishear dialect words and elderly speech patterns often. Fine for an early demo, not for the elderly-focused product you actually want.
-
-Given your elderly-user focus, plan to collect your own small corpus of elderly Emirati speech early — this is *the* dataset that generic providers won't have, and it's your biggest moat.
-
-**Ramsa Lab partnership — how to slot it in.** "Ramsa" exists in two forms worth distinguishing before you finalize the deal, since they solve different problems:
-- If what they're offering is a **raw labeled speech corpus** (real Emirati speakers, transcribed audio across sub-dialects like Urban/Bedouin/Mountain), that's ASR *training* data — exactly what you'd use to fine-tune the recognition layer above so it actually understands elderly Emirati speech, code-switching, and dialect vocabulary. This is the more valuable half for your core "understand grandma" problem.
-- If what they're offering is a **pre-built Emirati TTS voice module**, that's an *output* component — it plugs in at the text-to-speech stage (section 3.4) so Fatima speaks in an authentic Emirati voice, rather than helping her understand one.
-- Ask them directly: how many hours of audio, how many unique speakers, what sub-dialects/age ranges are covered (critically — do they have *elderly* speakers, not just general adult speakers), and what license terms apply to commercial fine-tuning versus research-only use. A number like "600,000 voices" is worth clarifying precisely (individual speakers vs. total labeled utterances/clips are very different things, and it changes what you're actually getting).
-- Either way, this is a genuinely strong move — a real Emirati corpus, especially one with elderly speaker coverage, directly addresses the single biggest risk in this whole plan.
-
-### 3.3 Understanding & dialogue (the "brain")
-Two jobs here that are actually different: (1) task understanding — "book me a doctor's appointment," "call my son," "turn off the lights," and (2) companionship — someone talking, wanting to be heard, not necessarily wanting a task done.
-
-- **LLM backbone**: Jais (developed in Abu Dhabi by Core42/G42 with MBZUAI) is the most culturally and linguistically native option — it's an Arabic-first bilingual model with dialect and cultural grounding built in, open-weight, and there's a regional ecosystem (Falcon from TII is another UAE-built alternative) if you want sovereign, in-region hosting. You could also route dialogue through Claude or another strong general model for reasoning-heavy agent tasks (booking logic, multi-step planning) while keeping Jais or a similar Arabic-native model for the conversational/companionship voice, and reconcile the two — many production Arabic voice agents actually pair a strong reasoning LLM with an Arabic-specialized layer rather than relying on one model for everything.
-- **Companionship mode**: this needs explicit design, not just "chat." For an elderly user talking about their day, the assistant should recognize when someone wants to be heard versus when they want something done, respond with warmth and short affirmations rather than jumping to solve, and gently offer help ("حاب أساعدك بشي؟") rather than assuming. This is a prompt-design and conversation-flow problem as much as a model problem.
-- **Quran module**: a dedicated intent, not a generic "play audio" fallback — recognize requests by reciter name, surah name, or even indirect requests ("سمعني شي يريح القلب"), and default to a small set of well-loved reciters. This should be treated with real care and accuracy given the religious significance — get the audio licensing and reciter attribution right from a reputable source rather than scraping.
-
-### 3.4 Text-to-speech (TTS)
-Pair with the ASR choice — several UAE-built platforms now offer Gulf/Emirati-native TTS voices (not just Gulf-accented MSA), with low latency suitable for real-time conversation. Have multiple voice options (male/female, formal/warm) so families can pick what feels right for their elders.
-
-### 3.5 Agent layer (calls, bookings, tasks)
-This is the part that turns it from a smart speaker into an assistant:
-- **Phone calls**: telephony integration (e.g. via a programmable voice API) so the assistant can place outbound calls on the user's behalf, or connect the user directly by voice command ("اتصل بابني").
-- **Appointment booking**: for known integrations (specific clinics, government services) build direct API/booking connections where available; for anything else, a "browser agent" that can navigate booking websites or call and speak with a human on the user's behalf is more realistic given how fragmented UAE service booking still is.
-- **Reminders & routines**: medication reminders, prayer time reminders, family check-ins — high value for elderly users specifically.
-- Treat this layer as an *agent orchestrator* calling tools, not baked into the conversational model — keeps it debuggable and safer to expand over time.
-
-### 3.6 Smart home
-Standard territory (Yasmina already does this) — integrate with common smart home protocols (Matter/Zigbee/Wi-Fi devices) so lights, AC, curtains are controllable by voice in dialect.
-
-### 3.7 Personalization & memory
-- Voice-print recognition per family member (Yasmina has this — worth matching), so grandma gets her Quran reciter and her son's number, not a generic profile.
-- Persistent memory of what an elderly user has shared (health concerns they've mentioned, family names, preferences) so the "someone who listens" feeling compounds over time rather than resetting each conversation. This needs very careful handling — see privacy section below.
-
-## 4. Data & privacy — treat this as first-class, not an afterthought
-
-You're handling: home audio, health-adjacent conversation (elderly users describing symptoms, medications), religious content, and phone-call agent access. A few non-negotiables:
-- **Data residency**: UAE has its own data protection law (PDPL). If you use a cloud ASR/LLM provider, check whether they offer in-region or sovereign deployment — several UAE-built AI platforms specifically market this for exactly this reason (banks, government, healthcare already require it).
-- **On-device processing where possible** for wake word and ideally for sensitive audio, to minimize what leaves the home.
-- **Explicit, elder-friendly consent flows** — not a buried terms-of-service. Family members setting this up for a parent should understand exactly what's recorded, stored, and for how long.
-- **No dark patterns around the "companionship" data** — if you're storing what an elderly person confides in the assistant, that's sensitive personal/health-adjacent data and deserves the strictest handling in the product.
-
-## 5. Regulatory notes (UAE-specific, verify current specifics as you build)
-- **TDRA** (Telecommunications and Digital Government Regulatory Authority) governs telecom and may have requirements around automated outbound calling — check current rules before enabling the phone-call agent feature broadly.
-- **PDPL** (UAE Personal Data Protection Law) governs how you collect, store, and process personal data, especially sensitive categories like health-related conversation.
-- If you eventually integrate with government service booking, expect to go through UAE Pass or similar official channels rather than scraping.
-
-## 6. Hardware
-- MVP can run on a repurposed smart-speaker reference platform (mic array + speaker + small compute board) to validate the software before investing in custom industrial design.
-- Physical design matters more than usual here — Yasmina already leans into Khaleeji aesthetic; consider majlis-appropriate materials/forms (not a generic black cylinder) since this will sit in a very specific kind of living room.
-- For elderly usability: a simple physical "listen" button as a fallback to wake word (some elderly users are more comfortable pressing a button than remembering a wake phrase), large/tactile volume controls, and clear physical indicator (light) showing when it's listening.
-
-## 7. Phased roadmap
-
-**Phase 0 — Validate the hard part (4–8 weeks)**
-Build a rough prototype (even phone-app based, no hardware) using a licensed Gulf-dialect ASR + Jais or similar + a Gulf TTS voice. Test it specifically with elderly Emirati speakers — this tells you fast whether the dialect/elderly-speech problem is actually solvable at the quality bar you need before you spend on hardware.
-
-**Phase 1 — MVP on real hardware (2–4 months)**
-Wake word, core conversation, Quran playback, smart home basics, one or two family voice profiles. Pilot in a handful of real households (ideally including grandparents), gather correction data on what it mishears — this becomes your dialect fine-tuning dataset.
-
-**Phase 2 — Agent capabilities (next few months)**
-Phone calling, appointment booking for a curated set of common services (clinics, government appointments), reminders/routines, expanded memory with strong privacy controls.
-
-**Phase 3 — Scale**
-Broader smart home integrations, more reciters/content, refine companionship mode based on real usage, expand hardware production.
-
-## 8. Team you'll likely need
-- ML/speech engineer (ASR fine-tuning, dialect data)
-- Conversational AI / prompt engineer (dialogue design, companionship mode, agent orchestration)
-- Embedded/hardware engineer (device, mic array, firmware)
-- Backend engineer (telephony, booking integrations, cloud infra)
-- Someone owning **cultural/religious correctness** — Quran content, dialect authenticity, elder-appropriate tone — ideally involved from day one, not bolted on for review
-- Privacy/compliance advisor familiar with UAE PDPL
-
-## 9. Biggest risks to watch
-1. **Dialect + elderly speech accuracy** — if it mishears grandma often, trust collapses fast. This is worth over-investing in early.
-2. **Companionship done badly feels creepy or hollow** — needs real design care, testing with actual elderly users, not just assumed from specs.
-3. **Agent actions (calls, bookings) going wrong** — a booking mistake or a bad phone call made "on behalf of" someone is a trust and liability issue; keep a human-confirmation step for anything consequential, especially early on.
-4. **Religious content sensitivity** — get reciter licensing and accuracy right; this is not a place to cut corners or use unlicensed audio.
-
----
-*Next step I'd suggest: Phase 0 above — a scrappy prototype focused purely on proving the ASR + companionship experience works for an actual elderly Emirati speaker, before committing to hardware.*
+## Contributing
+Not yet open for external contributions — this is a private early-stage project.
